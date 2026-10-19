@@ -40,6 +40,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforge.common.NeoForge;
+import com.github.alexmodguy.alexscaves.server.misc.war.NukeWarCommands;
+import com.github.alexmodguy.alexscaves.server.misc.war.NukeWars;
 import net.neoforged.neoforge.common.world.chunk.RegisterTicketControllersEvent;
 import net.neoforged.neoforge.common.world.chunk.TicketController;
 import net.neoforged.bus.api.IEventBus;
@@ -108,6 +110,7 @@ public class AlexsCaves {
         modEventBus.addListener(this::registerPayloads);
         modEventBus.addListener(this::registerTicketControllers);
         NeoForge.EVENT_BUS.register(new CommonEvents());
+        NeoForge.EVENT_BUS.addListener(NukeWarCommands::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(ACEffectRegistry::registerBrewingRecipes);
         ACBlockRegistry.DEF_REG.register(modEventBus);
         ACBlockEntityRegistry.DEF_REG.register(modEventBus);
@@ -187,6 +190,7 @@ public class AlexsCaves {
     private void commonSetup(final FMLCommonSetupEvent event) {
         PROXY.initPathfinding();
         event.enqueueWork(() -> {
+            NukeWars.init();
             ACSurfaceRules.setup();
             ACPlayerCapes.setup();
             ACEffectRegistry.setup();

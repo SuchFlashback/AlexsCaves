@@ -10,6 +10,7 @@ import com.github.alexmodguy.alexscaves.server.entity.living.TremorzillaEntity;
 import com.github.alexmodguy.alexscaves.server.misc.ACDamageTypes;
 import com.github.alexmodguy.alexscaves.server.misc.ACMath;
 import com.github.alexmodguy.alexscaves.server.misc.ACTagRegistry;
+import com.github.alexmodguy.alexscaves.server.misc.war.NukeWars;
 import com.github.alexmodguy.alexscaves.server.potion.ACEffectRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -33,7 +34,11 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.world.chunk.TicketController;
 
+import it.unimi.dsi.fastutil.longs.Long2BooleanOpenHashMap;
+
+import javax.annotation.Nullable;
 import java.util.List;
+import java.util.UUID;
 import java.util.Stack;
 
 public class NuclearExplosionEntity extends Entity {
@@ -51,6 +56,11 @@ public class NuclearExplosionEntity extends Entity {
     private boolean loadingChunks = false;
 
     private Explosion dummyExplosion;
+    // Community patch: who dropped the bomb (null for Nucleepers, nuclear furnaces, Sacks of Sating...).
+    // Blocks in Open Parties and Claims claims are only broken if the claim's faction is at war with the attacker's.
+    @Nullable
+    private UUID attacker;
+    private final Long2BooleanOpenHashMap breakableChunks = new Long2BooleanOpenHashMap();
 
     public NuclearExplosionEntity(EntityType<?> entityType, Level level) {
         super(entityType, level);
@@ -161,6 +171,20 @@ public class NuclearExplosionEntity extends Entity {
         return revert * baseDmg;
     }
 
+    public void setAttacker(@Nullable UUID attacker) {
+        this.attacker = attacker;
+    }
+
+    private boolean canBreakAt(int blockX, int blockZ) {
+        long key = ChunkPos.asLong(blockX >> 4, blockZ >> 4);
+        if (breakableChunks.containsKey(key)) {
+            return breakableChunks.get(key);
+        }
+        boolean result = !(level() instanceof ServerLevel serverLevel) || NukeWars.canNukeBreak(serverLevel, blockX >> 4, blockZ >> 4, attacker);
+        breakableChunks.put(key, result);
+        return result;
+    }
+
     private void removeChunk(int radius) {
         BlockPos chunkCorner = destroyingChunks.pop();
         BlockPos.MutableBlockPos carve = new BlockPos.MutableBlockPos();
@@ -176,6 +200,9 @@ public class NuclearExplosionEntity extends Entity {
         }
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
+                if (!canBreakAt(chunkCorner.getX() + x, chunkCorner.getZ() + z)) {
+                    continue;
+                }
                 for (int y = 15; y >= 0; y--) {
                     boolean canSetToFire = false;
                     carve.set(chunkCorner.getX() + x, Mth.clamp(chunkCorner.getY() + y, level().getMinBuildHeight(), level().getMaxBuildHeight()), chunkCorner.getZ() + z);
@@ -218,7 +245,7 @@ public class NuclearExplosionEntity extends Entity {
                     mutablePos.set(center.getX() + x, center.getY() + y, center.getZ() + z);
                     if (mutablePos.distSqr(center) <= TREMORZILLA_EGG_HATCH_RADIUS * TREMORZILLA_EGG_HATCH_RADIUS) {
                         BlockState state = level().getBlockState(mutablePos);
-                        if (state.is(ACBlockRegistry.TREMORZILLA_EGG.get()) && state.getBlock() instanceof TremorzillaEggBlock tremorzillaEggBlock) {
+                        if (state.is(ACBlockRegistry.TREMORZILLA_EGG.get()) && state.getBlock() instanceof TremorzillaEggBlock tremorzillaEggBlock && canBreakAt(mutablePos.getX(), mutablePos.getZ())) {
                             tremorzillaEggBlock.spawnDinosaurs(level(), mutablePos.immutable(), state);
                             level().removeBlock(mutablePos, false);
                         }
@@ -263,11 +290,15 @@ public class NuclearExplosionEntity extends Entity {
     @Override
     protected void readAdditionalSaveData(CompoundTag compoundTag) {
         loadingChunks = compoundTag.getBoolean("WasLoadingChunks");
+        attacker = compoundTag.hasUUID("Attacker") ? compoundTag.getUUID("Attacker") : null;
     }
 
     @Override
     protected void addAdditionalSaveData(CompoundTag compoundTag) {
         compoundTag.putBoolean("WasLoadingChunks", loadingChunks);
+        if (attacker != null) {
+            compoundTag.putUUID("Attacker", attacker);
+        }
 
     }
 }

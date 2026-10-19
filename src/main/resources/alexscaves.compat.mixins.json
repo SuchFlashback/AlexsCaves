@@ -1,0 +1,13 @@
+{
+  "required": false,
+  "package": "com.github.alexmodguy.alexscaves.mixincompat",
+  "plugin": "com.github.alexmodguy.alexscaves.compat.ACCompatMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "BombBayMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  },
+  "minVersion": "0.8"
+}

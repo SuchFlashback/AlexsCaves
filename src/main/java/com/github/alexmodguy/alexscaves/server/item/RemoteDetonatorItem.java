@@ -2,6 +2,7 @@ package com.github.alexmodguy.alexscaves.server.item;
 
 import com.github.alexmodguy.alexscaves.AlexsCaves;
 import com.github.alexmodguy.alexscaves.server.misc.ACAdvancementTriggerRegistry;
+import com.github.alexmodguy.alexscaves.server.block.ACBlockRegistry;
 import com.github.alexmodguy.alexscaves.server.misc.ACTagRegistry;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -83,7 +84,7 @@ public class RemoteDetonatorItem extends Item {
                 if(dimensionLevel != null){
                     loadChunksAround(dimensionLevel, player.getUUID(), globalPos.pos(), true);
                     BlockState blockState = dimensionLevel.getBlockState(globalPos.pos());
-                    if(blockState.is(ACTagRegistry.REMOTE_DETONATOR_ACTIVATES)){
+                    if(canDetonate(blockState)){
                         blockState.onCaughtFire(dimensionLevel, globalPos.pos(), Direction.UP, player);
                         if(player.distanceToSqr(globalPos.pos().getCenter()) > 1000){
                             ACAdvancementTriggerRegistry.REMOTE_DETONATION.get().triggerForEntity(player);
@@ -125,7 +126,7 @@ public class RemoteDetonatorItem extends Item {
                     BlockPos blockpos = blockposOpt.get();
                     boolean flag = false;
                     if((entity.tickCount + entity.getId()) % 20 == 0){
-                        if(level.isLoaded(blockpos) && !level.getBlockState(blockpos).is(ACTagRegistry.REMOTE_DETONATOR_ACTIVATES)){
+                        if(level.isLoaded(blockpos) && !canDetonate(level.getBlockState(blockpos))){
                             flag = true;
                         }
                     }
@@ -139,10 +140,15 @@ public class RemoteDetonatorItem extends Item {
         }
     }
 
+    // Community patch: nuclear bombs are never remote-detonated, even if a datapack adds them to the tag.
+    private static boolean canDetonate(BlockState blockState) {
+        return blockState.is(ACTagRegistry.REMOTE_DETONATOR_ACTIVATES) && !blockState.is(ACBlockRegistry.NUCLEAR_BOMB.get());
+    }
+
     public InteractionResult useOn(UseOnContext context) {
         BlockPos blockpos = context.getClickedPos();
         Level level = context.getLevel();
-        if (!level.getBlockState(blockpos).is(ACTagRegistry.REMOTE_DETONATOR_ACTIVATES)) {
+        if (!canDetonate(level.getBlockState(blockpos))) {
             return super.useOn(context);
         } else {
             level.playSound((Player)null, blockpos, SoundEvents.LODESTONE_COMPASS_LOCK, SoundSource.PLAYERS, 1.0F, 1.0F);

@@ -388,18 +388,7 @@ public class ACItemRegistry {
                 return abstractarrow;
             }
         });
-        DispenserBlock.registerBehavior(ACBlockRegistry.NUCLEAR_BOMB.get(), new DefaultDispenseItemBehavior() {
-            protected ItemStack execute(BlockSource blockSource, ItemStack itemStack) {
-                Level level = blockSource.level();
-                BlockPos blockpos = blockSource.pos().relative(blockSource.state().getValue(DispenserBlock.FACING));
-                NuclearBombEntity nuclearBomb = new NuclearBombEntity(level, (double)blockpos.getX() + 0.5D, (double)blockpos.getY(), (double)blockpos.getZ() + 0.5D);
-                level.addFreshEntity(nuclearBomb);
-                level.playSound((Player)null, nuclearBomb.getX(), nuclearBomb.getY(), nuclearBomb.getZ(), SoundEvents.TNT_PRIMED, SoundSource.BLOCKS, 1.0F, 1.0F);
-                level.gameEvent((Entity)null, GameEvent.ENTITY_PLACE, blockpos);
-                itemStack.shrink(1);
-                return itemStack;
-            }
-        });
+        // Community patch: dispensers no longer prime nuclear bombs (they just drop the item).
         DispenserBlock.registerBehavior(PURPLE_SODA_BUCKET.get(), new FluidContainerDispenseItemBehavior());
         DispenserBlock.registerBehavior(SWEETISH_FISH_RED_BUCKET.get(), new FluidContainerDispenseItemBehavior());
         DispenserBlock.registerBehavior(SWEETISH_FISH_GREEN_BUCKET.get(), new FluidContainerDispenseItemBehavior());

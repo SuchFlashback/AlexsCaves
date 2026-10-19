@@ -60,6 +60,7 @@ import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.pathfinder.PathType;
 import net.minecraft.world.phys.AABB;
@@ -894,13 +895,9 @@ public class TremorzillaEntity extends DinosaurEntity implements KeybindUsingMou
                 } else {
                     blockstate.onBlockExploded(level(), blockpos, dummyExplosion);
                 }
-                if (triggerExplosions) {
-                    if (nuke) {
-                        NuclearBombEntity bomb = ACEntityRegistry.NUCLEAR_BOMB.get().create(level());
-                        bomb.setPos((double) blockpos.getX() + 0.5D, (double) blockpos.getY(), (double) blockpos.getZ() + 0.5D);
-                        bomb.setTime(NuclearBombEntity.MAX_TIME);
-                        level().addFreshEntity(bomb);
-                    }
+                if (nuke) {
+                    // Community patch: the beam no longer sets off nuclear bombs; it knocks the item loose instead.
+                    Block.popResource(level(), blockpos, new ItemStack(ACBlockRegistry.NUCLEAR_BOMB.get()));
                 }
                 flag = true;
             }

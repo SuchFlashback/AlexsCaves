@@ -29,6 +29,8 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
+import javax.annotation.Nullable;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 public class NuclearBombEntity extends Entity {
@@ -36,6 +38,11 @@ public class NuclearBombEntity extends Entity {
     private static final EntityDataAccessor<Integer> TIME = SynchedEntityData.defineId(NuclearBombEntity.class, EntityDataSerializers.INT);
     public static final int MAX_TIME = 300;
     private boolean spawnedExplosion = false;
+    // Community patch: only bombs armed by a warship drop (NukeAircraft) explode; any other bomb
+    // (old saves, /summon, other mods) is defused on its first tick and drops the item.
+    private boolean armed = false;
+    @Nullable
+    private UUID attacker;
 
     public NuclearBombEntity(EntityType<?> entityType, Level level) {
         super(entityType, level);
@@ -51,7 +58,21 @@ public class NuclearBombEntity extends Entity {
         this.zo = z;
     }
 
+    public void arm(@Nullable UUID attacker) {
+        this.armed = true;
+        this.attacker = attacker;
+    }
+
+    public boolean isArmed() {
+        return armed;
+    }
+
     public void tick() {
+        if (!this.level().isClientSide && !armed) {
+            this.discard();
+            this.spawnAtLocation(new ItemStack(ACBlockRegistry.NUCLEAR_BOMB.get()));
+            return;
+        }
         if (!this.isNoGravity()) {
             this.setDeltaMovement(this.getDeltaMovement().add(0.0D, -0.04D, 0.0D));
         }
@@ -90,6 +111,7 @@ public class NuclearBombEntity extends Entity {
         NuclearExplosionEntity explosion = ACEntityRegistry.NUCLEAR_EXPLOSION.get().create(level());
         explosion.copyPosition(this);
         explosion.setSize(AlexsCaves.COMMON_CONFIG.nukeExplosionSizeModifier.get().floatValue());
+        explosion.setAttacker(attacker);
         level().addFreshEntity(explosion);
     }
 
@@ -125,12 +147,16 @@ public class NuclearBombEntity extends Entity {
 
     @Override
     protected void readAdditionalSaveData(CompoundTag compoundTag) {
-
+        armed = compoundTag.getBoolean("Armed");
+        attacker = compoundTag.hasUUID("Attacker") ? compoundTag.getUUID("Attacker") : null;
     }
 
     @Override
     protected void addAdditionalSaveData(CompoundTag compoundTag) {
-
+        compoundTag.putBoolean("Armed", armed);
+        if (attacker != null) {
+            compoundTag.putUUID("Attacker", attacker);
+        }
     }
 
     public boolean isPickable() {

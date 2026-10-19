@@ -72,6 +72,9 @@ dependencies {
     runtimeOnly "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
     // Citadel dependency - local jar from sibling project
     implementation files('../libs/citadel-2.7.1-1.21.1.jar')
+    // Community nuke patch: optional compat, compiled against the jars installed in the lab server
+    compileOnly files('../../server-neo/mods/immersive_aircraft-neoforge-1.7.0+1.21.1.jar')
+    compileOnly files('../../server-neo/mods/open-parties-and-claims-neoforge-1.21.1-0.33.0.jar')
 }
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
