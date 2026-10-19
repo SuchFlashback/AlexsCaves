@@ -22,6 +22,13 @@ repositories {
         name = "ModMaven"
         url = "https://modmaven.dev"
     }
+    maven {
+        name = "Modrinth"
+        url = "https://api.modrinth.com/maven"
+        content {
+            includeGroup "maven.modrinth"
+        }
+    }
 }
 
 base {
@@ -72,9 +79,11 @@ dependencies {
     runtimeOnly "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
     // Citadel dependency - local jar from sibling project
     implementation files('../libs/citadel-2.7.1-1.21.1.jar')
-    // Community nuke patch: optional compat, compiled against the jars installed in the lab server
-    compileOnly files('../../server-neo/mods/immersive_aircraft-neoforge-1.7.0+1.21.1.jar')
-    compileOnly files('../../server-neo/mods/open-parties-and-claims-neoforge-1.21.1-0.33.0.jar')
+    // Community nuke patch: optional compat (Modrinth version ids)
+    // Immersive Aircraft 1.7.0+1.21.1 (NeoForge): the BombBay mixin targets this exact version
+    compileOnly "maven.modrinth:immersive-aircraft:xO17G766"
+    // Open Parties and Claims neoforge-1.21.1-0.33.0
+    compileOnly "maven.modrinth:open-parties-and-claims:yWmXD7GW"
 }
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
