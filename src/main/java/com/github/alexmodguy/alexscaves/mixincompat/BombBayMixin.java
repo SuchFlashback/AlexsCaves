@@ -20,7 +20,7 @@ public abstract class BombBayMixin {
     private void ac_armNuclearBomb(Vector4f position, Vector3f direction, CallbackInfoReturnable<Entity> cir) {
         if (cir.getReturnValue() instanceof NuclearBombEntity bomb) {
             Weapon weapon = (Weapon) (Object) this;
-            NukeAircraft.onBombBayDrop(bomb, weapon.getEntity(), weapon.getOperator());
+            NukeAircraft.onBombBayDrop(bomb, weapon.getEntity(), weapon.getOperator(), weapon.getSlot());
         }
     }
 }

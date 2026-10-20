@@ -28,6 +28,9 @@ public class ACServerConfig {
     public final ModConfigSpec.IntValue nukeMaxBlockExplosionResistance;
     public final ModConfigSpec.BooleanValue nukesSpawnItemDrops;
     public final ModConfigSpec.DoubleValue nukeExplosionSizeModifier;
+    public final ModConfigSpec.DoubleValue nukeLauncherSizeBonus;
+    public final ModConfigSpec.IntValue nukeLauncherMax;
+    public final ModConfigSpec.IntValue nukeChunksPerTick;
     public final ModConfigSpec.BooleanValue totemOfPossessionPlayers;
     public final ModConfigSpec.IntValue darknessCloakChargeTime;
     public final ModConfigSpec.IntValue darknessCloakFlightTime;
@@ -79,6 +82,9 @@ public class ACServerConfig {
         nukeMaxBlockExplosionResistance = builder.comment("The maximum explosion resistance that a block can have to be destroyed by a nuclear explosion. Set to zero to disable all nuclear explosion block breaking.").translation("nuke_max_block_explosion_resistance").defineInRange("nuke_max_block_explosion_resistance", 1000, 0, Integer.MAX_VALUE);
         nukesSpawnItemDrops = builder.comment("Whether some block items are dropped by nuclear explosions. False if all destroyed blocks do not drop items.").translation("nuke_spawn_item_drops").define("nuke_spawn_item_drops", true);
         nukeExplosionSizeModifier = builder.comment("The scale of nuclear bomb destruction. multiply this by 16 to get the radius of a nuclear bomb explosion.").translation("nuclear_explosion_size_modifier").defineInRange("nuclear_explosion_size_modifier", 3.0D, 0.0, Double.MAX_VALUE);
+        nukeLauncherSizeBonus = builder.comment("Community patch: a warship click fires every equipped bomb bay (launcher) at once and their bombs are merged into a single explosion. One launcher gives the normal size; the explosion grows by this amount for each extra launcher. 0 = extra launchers only consume bombs.").translation("nuclear_launcher_size_bonus").defineInRange("nuclear_launcher_size_bonus", 2.25D, 0.0, 10.0);
+        nukeLauncherMax = builder.comment("Community patch: the most launchers (bomb bays) whose bombs count towards one explosion (1 = no bonus).").translation("nuclear_launcher_max").defineInRange("nuclear_launcher_max", 2, 1, 8);
+        nukeChunksPerTick = builder.comment("Community patch: how many 16x16x16 sections of a nuclear explosion are carved per tick (lower = less lag per tick, longer explosion).").translation("nuclear_chunks_per_tick").defineInRange("nuclear_chunks_per_tick", 2, 1, 8);
         totemOfPossessionPlayers = builder.comment("Whether the Totem of Possession can be applied to players.").translation("totem_of_possession_works_on_players").define("totem_of_possession_works_on_players", true);
         darknessCloakChargeTime = builder.comment("The amount of time (in ticks) it takes to charge up the Cloak of Darkness ability.").translation("darkness_cloak_charge_time").defineInRange("darkness_cloak_charge_time", 1000, 20, Integer.MAX_VALUE);
         darknessCloakFlightTime = builder.comment("The amount of time (in ticks) that players can fly with the Cloak of Darkness ability.").translation("darkness_cloak_fly_time").defineInRange("darkness_cloak_fly_time", 200, 20, Integer.MAX_VALUE);

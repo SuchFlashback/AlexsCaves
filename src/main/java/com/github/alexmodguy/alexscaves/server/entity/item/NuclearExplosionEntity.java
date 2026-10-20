@@ -35,6 +35,10 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.world.chunk.TicketController;
 
 import it.unimi.dsi.fastutil.longs.Long2BooleanOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.TntBlock;
+import net.minecraft.world.level.material.FluidState;
 
 import javax.annotation.Nullable;
 import java.util.List;
@@ -54,6 +58,16 @@ public class NuclearExplosionEntity extends Entity {
     private static final EntityDataAccessor<Boolean> NO_GRIEFING = SynchedEntityData.defineId(NuclearExplosionEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Boolean> INTENTIONAL_GAME_DESIGN = SynchedEntityData.defineId(NuclearExplosionEntity.class, EntityDataSerializers.BOOLEAN);
     private boolean loadingChunks = false;
+    // Community patch: only one explosion carves at a time (the others wait their turn), the carving does not
+    // update neighbours (no water/lava flowing in while it works), and the fluids next to the crater get their
+    // flow back at the end.
+    private static final int MAX_QUEUE_WAIT_TICKS = 1200;
+    private static final int MAX_RIM_FLUIDS = 20000;
+    private static NuclearExplosionEntity activeExplosion = null;
+    private boolean started = false;
+    private int waitedTicks = 0;
+    private boolean rimScheduled = false;
+    private final LongOpenHashSet rimFluids = new LongOpenHashSet();
 
     private Explosion dummyExplosion;
     // Community patch: who dropped the bomb (null for Nucleepers, nuclear furnaces, Sacks of Sating...).
@@ -68,8 +82,17 @@ public class NuclearExplosionEntity extends Entity {
 
     public void tick() {
         super.tick();
+        if (!level().isClientSide && !started && !isNoGriefing()) {
+            if (activeExplosion != null && activeExplosion != this && !activeExplosion.isRemoved() && waitedTicks < MAX_QUEUE_WAIT_TICKS) {
+                waitedTicks++;
+                this.tickCount = 1;
+                return;
+            }
+            started = true;
+            activeExplosion = this;
+        }
         int chunksAffected = getChunksAffected();
-        int radius = chunksAffected * 15;
+        int radius = Math.max(1, Math.round(getSize() * 15F));
         if (!spawnedParticle) {
             spawnedParticle = true;
             int particleY = (int) Math.ceil(this.getY());
@@ -79,6 +102,10 @@ public class NuclearExplosionEntity extends Entity {
             level().addAlwaysVisibleParticle(ACParticleRegistry.MUSHROOM_CLOUD.get(), true, this.getX(), particleY + 2, this.getZ(), this.getSize(), isIntentionalGameDesign() ? 1.0F : 0.0F, 0);
         }
         if (tickCount > 40 && destroyingChunks.isEmpty()) {
+            if (!level().isClientSide && started && !rimScheduled) {
+                rimScheduled = true;
+                scheduleRimFluids();
+            }
             this.remove(RemovalReason.DISCARDED);
         } else {
             if (!level().isClientSide && !isNoGriefing()) {
@@ -102,7 +129,7 @@ public class NuclearExplosionEntity extends Entity {
                     }
                     destroyingChunks.sort((blockPos1, blockPos2) -> Double.compare(blockPos2.distManhattan(this.blockPosition()), blockPos1.distManhattan(this.blockPosition())));
                 } else {
-                    int tickChunkCount = Math.min(destroyingChunks.size(), 3);
+                    int tickChunkCount = Math.min(destroyingChunks.size(), AlexsCaves.COMMON_CONFIG.nukeChunksPerTick.get());
                     for (int i = 0; i < tickChunkCount; i++) {
                         removeChunk(radius);
                     }
@@ -141,6 +168,9 @@ public class NuclearExplosionEntity extends Entity {
 
     @Override
     public void remove(Entity.RemovalReason removalReason) {
+        if (activeExplosion == this) {
+            activeExplosion = null;
+        }
         if (!level().isClientSide && loadingChunks) {
             loadingChunks = false;
             loadChunksAround(false);
@@ -219,17 +249,47 @@ public class NuclearExplosionEntity extends Entity {
                                 tremorzillaEggBlock.spawnDinosaurs(level(), carve, state);
                             }else if (AlexsCaves.COMMON_CONFIG.nukesSpawnItemDrops.get() && random.nextFloat() < itemDropModifier && state.getFluidState().isEmpty()) {
                                 level().destroyBlock(carve, true);
-                            } else {
+                            } else if (state.getBlock() instanceof TntBlock) {
                                 state.onBlockExploded(level(), carve, dummyExplosion);
+                            } else {
+                                level().setBlock(carve, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
                             }
+                            rememberRimFluids(carve);
                         }
                     }
-                    if (canSetToFire && random.nextFloat() < 0.15 && !level().getBlockState(carveBelow).isAir()) {
-                        level().setBlockAndUpdate(carveBelow.above(), Blocks.FIRE.defaultBlockState());
+                    if (canSetToFire && random.nextFloat() < 0.15 && !level().getBlockState(carveBelow).isAir() && level().getFluidState(carveBelow).isEmpty()) {
+                        // Community patch: no neighbour update, it would wake the water that is still to be carved and leave sheets of water in the crater
+                        level().setBlock(carveBelow.above(), Blocks.FIRE.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
                     }
                 }
             }
         }
+    }
+
+    private void rememberRimFluids(BlockPos.MutableBlockPos carve) {
+        if (rimFluids.size() >= MAX_RIM_FLUIDS) {
+            return;
+        }
+        BlockPos.MutableBlockPos neighbour = new BlockPos.MutableBlockPos();
+        for (net.minecraft.core.Direction direction : net.minecraft.core.Direction.values()) {
+            neighbour.setWithOffset(carve, direction);
+            if (!level().getFluidState(neighbour).isEmpty()) {
+                rimFluids.add(neighbour.asLong());
+            }
+        }
+    }
+
+    /** At the end: fluids next to the crater (and not removed by it) start flowing again, as after a vanilla explosion. */
+    private void scheduleRimFluids() {
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        for (long packed : rimFluids) {
+            pos.set(packed);
+            FluidState fluid = level().getFluidState(pos);
+            if (!fluid.isEmpty()) {
+                level().scheduleTick(pos.immutable(), fluid.getType(), fluid.getType().getTickDelay(level()));
+            }
+        }
+        rimFluids.clear();
     }
 
     private boolean isDestroyable(BlockState state) {

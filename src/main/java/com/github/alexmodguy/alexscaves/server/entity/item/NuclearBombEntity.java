@@ -41,6 +41,11 @@ public class NuclearBombEntity extends Entity {
     // Community patch: only bombs armed by a warship drop (NukeAircraft) explode; any other bomb
     // (old saves, /summon, other mods) is defused on its first tick and drops the item.
     private boolean armed = false;
+    // Community patch: bombs dropped in the same click as the first one are merged into it and vanish. Each extra
+    // launcher (bomb bay slot) that fires in that click makes the explosion bigger (extraBombs counts launchers - 1).
+    private int extraBombs = 0;
+    private final it.unimi.dsi.fastutil.ints.IntOpenHashSet launcherSlots = new it.unimi.dsi.fastutil.ints.IntOpenHashSet();
+    private boolean merged = false;
     @Nullable
     private UUID attacker;
 
@@ -63,11 +68,34 @@ public class NuclearBombEntity extends Entity {
         this.attacker = attacker;
     }
 
+    public void markMerged() {
+        this.merged = true;
+    }
+
+    /** Notes the launcher (bomb bay slot) that dropped this click's first bomb. */
+    public void setFirstLauncher(int slot) {
+        launcherSlots.add(slot);
+    }
+
+    /** A bomb from another bomb bay of the same click was merged into this one: counts when it comes from a new launcher. */
+    public boolean addLauncher(int slot) {
+        if (launcherSlots.contains(slot) || launcherSlots.size() >= AlexsCaves.COMMON_CONFIG.nukeLauncherMax.get()) {
+            return false;
+        }
+        launcherSlots.add(slot);
+        extraBombs++;
+        return true;
+    }
+
     public boolean isArmed() {
         return armed;
     }
 
     public void tick() {
+        if (!this.level().isClientSide && merged) {
+            this.discard();
+            return;
+        }
         if (!this.level().isClientSide && !armed) {
             this.discard();
             this.spawnAtLocation(new ItemStack(ACBlockRegistry.NUCLEAR_BOMB.get()));
@@ -110,7 +138,7 @@ public class NuclearBombEntity extends Entity {
     private void explode() {
         NuclearExplosionEntity explosion = ACEntityRegistry.NUCLEAR_EXPLOSION.get().create(level());
         explosion.copyPosition(this);
-        explosion.setSize(AlexsCaves.COMMON_CONFIG.nukeExplosionSizeModifier.get().floatValue());
+        explosion.setSize(AlexsCaves.COMMON_CONFIG.nukeExplosionSizeModifier.get().floatValue() + extraBombs * AlexsCaves.COMMON_CONFIG.nukeLauncherSizeBonus.get().floatValue());
         explosion.setAttacker(attacker);
         level().addFreshEntity(explosion);
     }
@@ -148,12 +176,14 @@ public class NuclearBombEntity extends Entity {
     @Override
     protected void readAdditionalSaveData(CompoundTag compoundTag) {
         armed = compoundTag.getBoolean("Armed");
+        extraBombs = compoundTag.getInt("ExtraBombs");
         attacker = compoundTag.hasUUID("Attacker") ? compoundTag.getUUID("Attacker") : null;
     }
 
     @Override
     protected void addAdditionalSaveData(CompoundTag compoundTag) {
         compoundTag.putBoolean("Armed", armed);
+        compoundTag.putInt("ExtraBombs", extraBombs);
         if (attacker != null) {
             compoundTag.putUUID("Attacker", attacker);
         }
