@@ -31,6 +31,7 @@ public class ACServerConfig {
     public final ModConfigSpec.DoubleValue nukeLauncherSizeBonus;
     public final ModConfigSpec.IntValue nukeLauncherMax;
     public final ModConfigSpec.IntValue nukeMsPerTick;
+    public final ModConfigSpec.IntValue nukeMinCarveSeconds;
     public final ModConfigSpec.BooleanValue totemOfPossessionPlayers;
     public final ModConfigSpec.IntValue darknessCloakChargeTime;
     public final ModConfigSpec.IntValue darknessCloakFlightTime;
@@ -85,6 +86,7 @@ public class ACServerConfig {
         nukeLauncherSizeBonus = builder.comment("Community patch: a warship click fires every equipped bomb bay (launcher) at once and their bombs are merged into a single explosion. One launcher gives the normal size; the explosion grows by this amount for each extra launcher. 0 = extra launchers only consume bombs.").translation("nuclear_launcher_size_bonus").defineInRange("nuclear_launcher_size_bonus", 2.25D, 0.0, 10.0);
         nukeLauncherMax = builder.comment("Community patch: the most launchers (bomb bays) whose bombs count towards one explosion (1 = no bonus).").translation("nuclear_launcher_max").defineInRange("nuclear_launcher_max", 2, 1, 8);
         nukeMsPerTick = builder.comment("Community patch: milliseconds of each server tick that a nuclear explosion may spend carving blocks (lower = smoother, but the explosion lasts longer; the crater is the same). It always carves at least one column per tick.").translation("nuclear_ms_per_tick").defineInRange("nuclear_ms_per_tick", 20, 1, 45);
+        nukeMinCarveSeconds = builder.comment("Community patch: the crater opens from the centre outwards over at least this many seconds (0 = as fast as nuclear_ms_per_tick allows). Higher values spread the work and the block updates sent to the players; the crater is the same.").translation("nuclear_min_carve_seconds").defineInRange("nuclear_min_carve_seconds", 0, 0, 60);
         totemOfPossessionPlayers = builder.comment("Whether the Totem of Possession can be applied to players.").translation("totem_of_possession_works_on_players").define("totem_of_possession_works_on_players", true);
         darknessCloakChargeTime = builder.comment("The amount of time (in ticks) it takes to charge up the Cloak of Darkness ability.").translation("darkness_cloak_charge_time").defineInRange("darkness_cloak_charge_time", 1000, 20, Integer.MAX_VALUE);
         darknessCloakFlightTime = builder.comment("The amount of time (in ticks) that players can fly with the Cloak of Darkness ability.").translation("darkness_cloak_fly_time").defineInRange("darkness_cloak_fly_time", 200, 20, Integer.MAX_VALUE);

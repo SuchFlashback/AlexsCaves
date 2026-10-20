@@ -30,7 +30,10 @@ import java.util.UUID;
 
 public class BeholderEyeEntity extends Entity implements PossessesCamera {
 
-    public static final TicketController TICKET_CONTROLLER = new TicketController(ResourceLocation.fromNamespaceAndPath(AlexsCaves.MODID, "beholder_eye"));
+    // Community patch: the chunks were forced as ticking and released as non-ticking, so they were never released (and came
+    // back at every start). They are now released with the same flag, and whatever an older version left is purged when the
+    // world loads (a possession never survives a restart).
+    public static final TicketController TICKET_CONTROLLER = new TicketController(ResourceLocation.fromNamespaceAndPath(AlexsCaves.MODID, "beholder_eye"), com.github.alexmodguy.alexscaves.server.level.storage.ACWorldData::clearLoadedChunksCallback);
 
     private static final int LOAD_CHUNK_DISTANCE = 2;
     private static final EntityDataAccessor<Optional<UUID>> USING_PLAYER_ID = SynchedEntityData.defineId(BeholderEyeEntity.class, EntityDataSerializers.OPTIONAL_UUID);
@@ -38,6 +41,7 @@ public class BeholderEyeEntity extends Entity implements PossessesCamera {
     private static final EntityDataAccessor<Float> X_ROT = SynchedEntityData.defineId(BeholderEyeEntity.class, EntityDataSerializers.FLOAT);
 
     private boolean loadingChunks = false;
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet forcedChunks = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private boolean stopPossession;
     private boolean prevStopPossession = true;
 
@@ -136,6 +140,10 @@ public class BeholderEyeEntity extends Entity implements PossessesCamera {
     }
 
     public void remove(Entity.RemovalReason removalReason) {
+        if (!level().isClientSide && loadingChunks) {
+            loadingChunks = false;
+            loadChunksAround(false);
+        }
         this.level().broadcastEntityEvent(this, (byte) 78);
         super.remove(removalReason);
     }
@@ -226,20 +234,34 @@ public class BeholderEyeEntity extends Entity implements PossessesCamera {
 
     private void loadChunksAround(boolean load) {
         if (this.level() instanceof ServerLevel serverLevel) {
+            if (!load) {
+                // release exactly the chunks that were forced (the player may have moved since)
+                for (long chunk : forcedChunks) {
+                    TICKET_CONTROLLER.forceChunk(serverLevel, this, ChunkPos.getX(chunk), ChunkPos.getZ(chunk), false, true);
+                }
+                forcedChunks.clear();
+                return;
+            }
             if(this.getUsingPlayer() instanceof ServerPlayer serverPlayer){
                 ChunkPos playerChunkPos = new ChunkPos(serverPlayer.blockPosition());
-                TICKET_CONTROLLER.forceChunk(serverLevel, this, playerChunkPos.x, playerChunkPos.z, load, load);
+                forceChunk(serverLevel, playerChunkPos.x, playerChunkPos.z);
             }
             ChunkPos chunkPos = new ChunkPos(this.blockPosition());
             int dist = Math.max(LOAD_CHUNK_DISTANCE, serverLevel.getServer().getPlayerList().getViewDistance() / 2);
             for (int i = -dist; i <= dist; i++) {
                 for (int j = -dist; j <= dist; j++) {
-                    TICKET_CONTROLLER.forceChunk(serverLevel, this, chunkPos.x + i, chunkPos.z + j, load, load);
-                    if (load && this.getUsingPlayer() instanceof ServerPlayer serverPlayer) {
+                    forceChunk(serverLevel, chunkPos.x + i, chunkPos.z + j);
+                    if (this.getUsingPlayer() instanceof ServerPlayer serverPlayer) {
                         serverPlayer.connection.send(new ClientboundLevelChunkWithLightPacket(level().getChunk(chunkPos.x + i, chunkPos.z + j), level().getLightEngine(), (BitSet)null, (BitSet)null));
                     }
                 }
             }
+        }
+    }
+
+    private void forceChunk(ServerLevel serverLevel, int chunkX, int chunkZ) {
+        if (forcedChunks.add(ChunkPos.asLong(chunkX, chunkZ))) {
+            TICKET_CONTROLLER.forceChunk(serverLevel, this, chunkX, chunkZ, true, true);
         }
     }
 

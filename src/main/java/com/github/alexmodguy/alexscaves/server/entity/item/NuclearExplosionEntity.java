@@ -92,24 +92,45 @@ public class NuclearExplosionEntity extends Entity {
     // ticket that is released at the end; they load in the background while the carving works on the ones that are ready.
     private static final TicketType<UUID> NUKE_TICKET = TicketType.create("alexscaves:nuclear_explosion", UUID::compareTo);
     private static final int CHUNK_TICKET_DISTANCE = 2;
-    private static final int MAX_CHUNK_WAIT_TICKS = 600;
+    // lab6: a chunk is only loaded right away if nothing has come in for 5 minutes (it was 30 s): a chunk being generated can
+    // take long (Streams Reflowing holds the generation up to 45 s while it plans new rivers), and loading it from the main
+    // thread froze the server for all that time
+    private static final int MAX_CHUNK_WAIT_TICKS = 6000;
     private static final int FINISH_DELAY_TICKS = 5;
     private static final boolean PROFILE = Boolean.getBoolean("alexscaves.nukeprofile");
     private static long serverTickStart = 0L;
     private static long serverTickSumNs = 0L;
     private static long serverTickMaxNs = 0L;
     private static int serverTickCount = 0;
+    // time between the end of a tick and the start of the next one: sleep, plus the tasks the server runs between ticks
+    // (finishing chunk loads, among others); a stall there makes the server fall behind without a slow tick
+    private static long serverTickEnd = 0L;
+    private static long serverGapMaxNs = 0L;
+    private static final long PROFILE_STALL_NS = 150_000_000L;
     static {
         if (PROFILE) {
-            NeoForge.EVENT_BUS.addListener((ServerTickEvent.Pre event) -> serverTickStart = System.nanoTime());
+            NeoForge.EVENT_BUS.addListener((ServerTickEvent.Pre event) -> {
+                serverTickStart = System.nanoTime();
+                if (serverTickEnd != 0L) {
+                    long gap = serverTickStart - serverTickEnd;
+                    serverGapMaxNs = Math.max(serverGapMaxNs, gap);
+                    if (gap > PROFILE_STALL_NS) {
+                        AlexsCaves.LOGGER.info("[nukeprofile] stall between ticks: {} ms (explosion {})", ms(gap), NuclearExplosionEntity.activeExplosion == null ? "none" : "t=" + NuclearExplosionEntity.activeExplosion.tickCount);
+                    }
+                }
+            });
             NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post event) -> {
-                long took = System.nanoTime() - serverTickStart;
+                serverTickEnd = System.nanoTime();
+                long took = serverTickEnd - serverTickStart;
                 serverTickSumNs += took;
                 serverTickCount++;
                 serverTickMaxNs = Math.max(serverTickMaxNs, took);
+                if (took > PROFILE_STALL_NS) {
+                    AlexsCaves.LOGGER.info("[nukeprofile] slow server tick: {} ms (explosion {})", ms(took), NuclearExplosionEntity.activeExplosion == null ? "none" : "t=" + NuclearExplosionEntity.activeExplosion.tickCount);
+                }
                 if (NuclearExplosionEntity.activeExplosion == null && serverTickCount >= 200) {
-                    AlexsCaves.LOGGER.info("[nukeprofile] server (no explosion) 200 ticks: avg {} ms, max {} ms", ms(serverTickSumNs / serverTickCount), ms(serverTickMaxNs));
-                    serverTickSumNs = serverTickMaxNs = 0L;
+                    AlexsCaves.LOGGER.info("[nukeprofile] server (no explosion) 200 ticks: avg {} ms, max {} ms, max gap between ticks {} ms", ms(serverTickSumNs / serverTickCount), ms(serverTickMaxNs), ms(serverGapMaxNs));
+                    serverTickSumNs = serverTickMaxNs = serverGapMaxNs = 0L;
                     serverTickCount = 0;
                 }
             });
@@ -123,20 +144,28 @@ public class NuclearExplosionEntity extends Entity {
     // Corners of the cubes to carve (packed BlockPos), nearest to the centre first; null until the first carving tick.
     private long[] cubes = null;
     private int cubeIndex = 0;
+    private int carveTicks = 0;
     private int columnIndex = 0;
     private final double[] yDist = new double[16];
-    private long statCarveNs, statScanNs, statTickNs, statBlocks, statPositions, statFire;
+    private long statCarveNs, statScanNs, statTickNs, statBlocks, statPositions, statFire, statRimFluids, statRimDropped;
+    // profile only: blocks changed per section in this tick, to estimate the block update packets sent to each player
+    private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap tickSectionChanges = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
+    private long statPacketBytes, statWindowPacketBytes, statMaxTickPacketBytes;
     private long statWindowTickNs, statWindowCarveNs, statWindowScanNs, statWindowMaxTickNs;
     private int statTicks, statActiveTicks, statWindowTicks;
     private long statMaxTickNs = 0L;
     private long[] chunkSet = null;
     private boolean ticketsHeld = false;
     private int chunkWaitTicks = 0;
-    private int eggWaitTicks = 0;
+    private final LongOpenHashSet eggChunksDone = new LongOpenHashSet();
     private int finishedTick = -1;
     private boolean hatchScanDone = false;
     private LevelChunk cachedChunk = null;
     private int cachedChunkX = Integer.MIN_VALUE, cachedChunkZ = Integer.MIN_VALUE;
+    // lab6: whether each section (packed SectionPos) may hold fluids (palette test), and whether the current cube has any nearby
+    private final Long2BooleanOpenHashMap sectionMayHaveFluid = new Long2BooleanOpenHashMap();
+    private boolean cubeNearFluid = true;
+    private final it.unimi.dsi.fastutil.objects.Reference2BooleanOpenHashMap<BlockState> destroyable = new it.unimi.dsi.fastutil.objects.Reference2BooleanOpenHashMap<>();
 
     private Explosion dummyExplosion;
     // Community patch: who dropped the bomb (null for Nucleepers, nuclear furnaces, Sacks of Sating...).
@@ -202,6 +231,9 @@ public class NuclearExplosionEntity extends Entity {
                     long carveStart = System.nanoTime();
                     carve(radius);
                     carveNs = System.nanoTime() - carveStart;
+                    if (PROFILE) {
+                        estimateBlockPackets();
+                    }
                 }
             }
             if (level().isClientSide || tickCount <= 40 || tickCount % LATE_EFFECT_INTERVAL == 0) {
@@ -274,16 +306,33 @@ public class NuclearExplosionEntity extends Entity {
             statWindowScanNs += scanNs;
             statWindowMaxTickNs = Math.max(statWindowMaxTickNs, tickNs);
             if (statWindowTicks >= 20) {
-                AlexsCaves.LOGGER.info("[nukeprofile] t={} cubes {}/{} blocks={} pos={} | explosion tick avg {} ms max {} ms (carve {} ms, entities {} ms) | server tick avg {} ms max {} ms",
-                        tickCount, cubeIndex, cubes == null ? 0 : cubes.length, statBlocks, statPositions,
+                AlexsCaves.LOGGER.info("[nukeprofile] t={} cubes {}/{} blocks={} pos={} block packets {} kB | explosion tick avg {} ms max {} ms (carve {} ms, entities {} ms) | server tick avg {} ms max {} ms, max gap between ticks {} ms",
+                        tickCount, cubeIndex, cubes == null ? 0 : cubes.length, statBlocks, statPositions, statWindowPacketBytes / 1024,
                         ms(statWindowTickNs / statWindowTicks), ms(statWindowMaxTickNs), ms(statWindowCarveNs / statWindowTicks), ms(statWindowScanNs / statWindowTicks),
-                        ms(serverTickCount == 0 ? 0 : serverTickSumNs / serverTickCount), ms(serverTickMaxNs));
+                        ms(serverTickCount == 0 ? 0 : serverTickSumNs / serverTickCount), ms(serverTickMaxNs), ms(serverGapMaxNs));
                 statWindowTicks = 0;
+                statWindowPacketBytes = 0L;
                 statWindowTickNs = statWindowCarveNs = statWindowScanNs = statWindowMaxTickNs = 0L;
-                serverTickSumNs = serverTickMaxNs = 0L;
+                serverTickSumNs = serverTickMaxNs = serverGapMaxNs = 0L;
                 serverTickCount = 0;
             }
         }
+    }
+
+    /**
+     * Profile only: size of this tick's block update packets for one player (1.21.1 ClientboundSectionBlocksUpdatePacket:
+     * section position 8 bytes + count + one varlong per block, 2 bytes for air and up to 4 for fire; a single change is a
+     * ClientboundBlockUpdatePacket of ~11 bytes), before compression and without the light updates.
+     */
+    private void estimateBlockPackets() {
+        long bytes = 0L;
+        for (int count : tickSectionChanges.values()) {
+            bytes += count == 1 ? 11 : 11 + 2L * count;
+        }
+        tickSectionChanges.clear();
+        statPacketBytes += bytes;
+        statWindowPacketBytes += bytes;
+        statMaxTickPacketBytes = Math.max(statMaxTickPacketBytes, bytes);
     }
 
     private static String ms(long nanos) {
@@ -291,9 +340,10 @@ public class NuclearExplosionEntity extends Entity {
     }
 
     private void logSummary(int radius) {
-        AlexsCaves.LOGGER.info("Nuclear explosion finished: size {} (radius {}), {} cubes, {} blocks changed, {} ticks ({} carving), carving {} ms in total ({} ms per carving tick, worst explosion tick {} ms), entity effects {} ms",
+        AlexsCaves.LOGGER.info("Nuclear explosion finished: size {} (radius {}), {} cubes, {} blocks changed, {} ticks ({} carving), carving {} ms in total ({} ms per carving tick, worst explosion tick {} ms), entity effects {} ms, {} chunks held, {} rim fluids ({} over the cap){}",
                 getSize(), radius, cubes == null ? 0 : cubes.length, statBlocks, statTicks, statActiveTicks, ms(statCarveNs),
-                ms(statActiveTicks == 0 ? 0 : statCarveNs / statActiveTicks), ms(statMaxTickNs), ms(statScanNs));
+                ms(statActiveTicks == 0 ? 0 : statCarveNs / statActiveTicks), ms(statMaxTickNs), ms(statScanNs), chunkSet == null ? 0 : chunkSet.length, statRimFluids, statRimDropped,
+                PROFILE ? String.format(java.util.Locale.ROOT, ", block packets %.0f kB per player (max %.0f kB in a tick)", statPacketBytes / 1024.0, statMaxTickPacketBytes / 1024.0) : "");
     }
 
     @Override
@@ -446,12 +496,16 @@ public class NuclearExplosionEntity extends Entity {
         }
         cachedChunk = null;
         long deadline = System.nanoTime() + AlexsCaves.COMMON_CONFIG.nukeMsPerTick.get() * 1_000_000L;
+        // progressive mode: the cubes (nearest first) are released over nuclear_min_carve_seconds
+        carveTicks++;
+        int minCarveTicks = AlexsCaves.COMMON_CONFIG.nukeMinCarveSeconds.get() * 20;
+        int cubeLimit = minCarveTicks <= 0 ? cubes.length : (int) Math.min(cubes.length, Math.ceil(cubes.length * (double) carveTicks / minCarveTicks));
         BlockPos center = this.blockPosition();
         int minY = level().getMinBuildHeight();
         int maxY = level().getMaxBuildHeight() - 1;
         BlockPos.MutableBlockPos carve = new BlockPos.MutableBlockPos();
         BlockPos.MutableBlockPos carveBelow = new BlockPos.MutableBlockPos();
-        while (cubeIndex < cubes.length) {
+        while (cubeIndex < cubeLimit) {
             long corner = cubes[cubeIndex];
             int x0 = BlockPos.getX(corner);
             int y0 = BlockPos.getY(corner);
@@ -460,6 +514,7 @@ public class NuclearExplosionEntity extends Entity {
                 int y = y0 + row;
                 yDist[row] = y < minY || y > maxY ? 0.0D : rowFactor(center.getY(), y, radius);
             }
+            cubeNearFluid = mayHaveFluidAround(x0, y0, z0);
             while (columnIndex < 256) {
                 int column = columnIndex;
                 long columnStart = PROFILE ? System.nanoTime() : 0L;
@@ -505,6 +560,9 @@ public class NuclearExplosionEntity extends Entity {
         }
         int localX = bx & 15;
         int localZ = bz & 15;
+        if (!neighbourChunksReady(bx >> 4, bz >> 4, localX, localZ)) {
+            return false;
+        }
         int sectionIndex = Integer.MIN_VALUE;
         LevelChunkSection section = null;
         boolean onlyAir = false;
@@ -525,7 +583,8 @@ public class NuclearExplosionEntity extends Entity {
                 continue;
             }
             BlockState state = section.getBlockState(localX, by & 15, localZ);
-            if ((state.isAir() && state.getFluidState().isEmpty()) || !isDestroyable(state)) {
+            // (air never holds a fluid)
+            if (state.isAir() || !isDestroyableCached(state)) {
                 continue;
             }
             statPositions++;
@@ -542,11 +601,23 @@ public class NuclearExplosionEntity extends Entity {
                 level().destroyBlock(carve, true);
             } else if (state.getBlock() instanceof TntBlock) {
                 state.onBlockExploded(level(), carve, dummyExplosion);
+            } else if (PROFILE) {
+                long setStart = System.nanoTime();
+                level().setBlock(carve, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
+                long took = System.nanoTime() - setStart;
+                if (took > 20_000_000L) {
+                    AlexsCaves.LOGGER.info("[nukeprofile] slow block removal of {} at {} took {} ms", state, carve, ms(took));
+                }
             } else {
                 level().setBlock(carve, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS);
             }
             statBlocks++;
-            rememberRimFluids(carve, chunk, radius, center);
+            if (PROFILE) {
+                tickSectionChanges.addTo(net.minecraft.core.SectionPos.asLong(bx >> 4, by >> 4, bz >> 4), 1);
+            }
+            if (cubeNearFluid) {
+                rememberRimFluids(carve, chunk, radius, center);
+            }
             if (random.nextFloat() < 0.15) {
                 BlockState below = chunk.getBlockState(carveBelow);
                 // Fire on a block that the explosion carves a moment later would only be taken away again (and cost thousands of fire ticks and block updates): it is only set where the floor stays.
@@ -560,9 +631,65 @@ public class NuclearExplosionEntity extends Entity {
         return true;
     }
 
+    /**
+     * Lithium updates the hoppers next to every block changed without neighbour updates, and looks them up with a chunk
+     * request that waits (and runs every pending chunk load on the main thread meanwhile) when the neighbour chunk is still
+     * loading: a column on the edge of its chunk is only carved once the chunk next to it is ready.
+     */
+    private boolean neighbourChunksReady(int chunkX, int chunkZ, int localX, int localZ) {
+        if (chunkWaitTicks >= MAX_CHUNK_WAIT_TICKS || (localX != 0 && localX != 15 && localZ != 0 && localZ != 15)) {
+            return true;
+        }
+        net.minecraft.server.level.ServerChunkCache source = ((ServerLevel) level()).getChunkSource();
+        return (localX != 0 || source.getChunkNow(chunkX - 1, chunkZ) != null)
+                && (localX != 15 || source.getChunkNow(chunkX + 1, chunkZ) != null)
+                && (localZ != 0 || source.getChunkNow(chunkX, chunkZ - 1) != null)
+                && (localZ != 15 || source.getChunkNow(chunkX, chunkZ + 1) != null);
+    }
+
+    /** False only if no section around the cube (one block of margin) can hold a fluid: then the cube has no rim fluids to remember. */
+    private boolean mayHaveFluidAround(int x0, int y0, int z0) {
+        net.minecraft.server.level.ServerChunkCache source = ((ServerLevel) level()).getChunkSource();
+        for (int sectionX = (x0 - 1) >> 4; sectionX <= (x0 + 16) >> 4; sectionX++) {
+            for (int sectionZ = (z0 - 1) >> 4; sectionZ <= (z0 + 16) >> 4; sectionZ++) {
+                for (int sectionY = (y0 - 1) >> 4; sectionY <= (y0 + 16) >> 4; sectionY++) {
+                    long key = net.minecraft.core.SectionPos.asLong(sectionX, sectionY, sectionZ);
+                    if (sectionMayHaveFluid.containsKey(key)) {
+                        if (sectionMayHaveFluid.get(key)) {
+                            return true;
+                        }
+                        continue;
+                    }
+                    LevelChunk chunk = source.getChunkNow(sectionX, sectionZ);
+                    if (chunk == null) {
+                        // not loaded yet: assume it may (not cached)
+                        return true;
+                    }
+                    int index = chunk.getSectionIndexFromSectionY(sectionY);
+                    boolean mayHave = index >= 0 && index < chunk.getSectionsCount() && !chunk.getSection(index).hasOnlyAir()
+                            && chunk.getSection(index).maybeHas(state -> !state.getFluidState().isEmpty());
+                    sectionMayHaveFluid.put(key, mayHave);
+                    if (mayHave) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isDestroyableCached(BlockState state) {
+        if (destroyable.containsKey(state)) {
+            return destroyable.getBoolean(state);
+        }
+        boolean result = isDestroyable(state);
+        destroyable.put(state, result);
+        return result;
+    }
+
     /** True if the carving takes (or has taken) the block at this position: the same test as the carving itself. */
     private boolean carvingReaches(BlockPos pos, BlockState state, int radius, BlockPos center) {
-        if (pos.getY() < level().getMinBuildHeight() || pos.getY() >= level().getMaxBuildHeight() || !canBreakAt(pos.getX(), pos.getZ()) || !isDestroyable(state)) {
+        if (pos.getY() < level().getMinBuildHeight() || pos.getY() >= level().getMaxBuildHeight() || !canBreakAt(pos.getX(), pos.getZ()) || !isDestroyableCached(state)) {
             return false;
         }
         double rowFactor = rowFactor(center.getY(), pos.getY(), radius);
@@ -580,6 +707,7 @@ public class NuclearExplosionEntity extends Entity {
     /** Fluids touching a carved block that the carving does not take itself: they are the rim of the crater. */
     private void rememberRimFluids(BlockPos.MutableBlockPos carve, LevelChunk chunk, int radius, BlockPos center) {
         if (rimFluids.size() >= MAX_RIM_FLUIDS) {
+            statRimDropped++;
             return;
         }
         BlockPos.MutableBlockPos neighbour = new BlockPos.MutableBlockPos();
@@ -603,6 +731,7 @@ public class NuclearExplosionEntity extends Entity {
     private void scheduleRimFluids() {
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         int n = 0;
+        statRimFluids = rimFluids.size();
         for (long packed : rimFluids) {
             pos.set(packed);
             FluidState fluid = level().getFluidState(pos);
@@ -617,50 +746,61 @@ public class NuclearExplosionEntity extends Entity {
         return (!state.is(ACTagRegistry.NUKE_PROOF) && state.getBlock().getExplosionResistance() < AlexsCaves.COMMON_CONFIG.nukeMaxBlockExplosionResistance.get()) || state.is(ACBlockRegistry.TREMORZILLA_EGG.get());
     }
 
-    /** Hatches the Tremorzilla eggs close to the centre; false while the chunks around are still loading (tried again next tick). */
+    /**
+     * Hatches the Tremorzilla eggs close to the centre, chunk by chunk as they are ready; false while some are still loading
+     * (tried again next tick). lab6: a chunk still loading (or being generated) is never waited for while the carving goes
+     * on (that froze the server for the whole generation of the chunk); once the carving is over it is loaded right away.
+     */
     private boolean hatchNearbyTremorzillaEggs() {
         BlockPos center = this.blockPosition();
         int radius = TREMORZILLA_EGG_HATCH_RADIUS;
         ServerLevel serverLevel = (ServerLevel) level();
-        List<LevelChunk> chunks = new java.util.ArrayList<>();
+        boolean done = true;
+        BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
         for (int chunkX = (center.getX() - radius) >> 4; chunkX <= (center.getX() + radius) >> 4; chunkX++) {
             for (int chunkZ = (center.getZ() - radius) >> 4; chunkZ <= (center.getZ() + radius) >> 4; chunkZ++) {
+                long key = ChunkPos.asLong(chunkX, chunkZ);
+                if (eggChunksDone.contains(key)) {
+                    continue;
+                }
                 LevelChunk chunk = serverLevel.getChunkSource().getChunkNow(chunkX, chunkZ);
                 if (chunk == null) {
-                    if (++eggWaitTicks < MAX_CHUNK_WAIT_TICKS) {
-                        return false;
+                    if (!carvingFinished()) {
+                        done = false;
+                        continue;
                     }
                     chunk = serverLevel.getChunk(chunkX, chunkZ);
                 }
-                chunks.add(chunk);
+                hatchEggsIn(chunk, center, radius, mutablePos);
+                eggChunksDone.add(key);
             }
         }
-        BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
-        for (LevelChunk chunk : chunks) {
-            for (int sectionIndex = 0; sectionIndex < chunk.getSectionsCount(); sectionIndex++) {
-                LevelChunkSection section = chunk.getSection(sectionIndex);
-                int sectionY = chunk.getSectionYFromSectionIndex(sectionIndex) << 4;
-                if (sectionY + 15 < center.getY() - radius || sectionY > center.getY() + radius || section.hasOnlyAir() || !section.maybeHas(state -> state.is(ACBlockRegistry.TREMORZILLA_EGG.get()))) {
-                    continue;
-                }
-                for (int x = 0; x < 16; x++) {
-                    for (int y = 0; y < 16; y++) {
-                        for (int z = 0; z < 16; z++) {
-                            BlockState state = section.getBlockState(x, y, z);
-                            if (!state.is(ACBlockRegistry.TREMORZILLA_EGG.get()) || !(state.getBlock() instanceof TremorzillaEggBlock tremorzillaEggBlock)) {
-                                continue;
-                            }
-                            mutablePos.set((chunk.getPos().x << 4) + x, sectionY + y, (chunk.getPos().z << 4) + z);
-                            if (mutablePos.distSqr(center) <= radius * radius && canBreakAt(mutablePos.getX(), mutablePos.getZ())) {
-                                tremorzillaEggBlock.spawnDinosaurs(level(), mutablePos.immutable(), state);
-                                level().removeBlock(mutablePos, false);
-                            }
+        return done;
+    }
+
+    private void hatchEggsIn(LevelChunk chunk, BlockPos center, int radius, BlockPos.MutableBlockPos mutablePos) {
+        for (int sectionIndex = 0; sectionIndex < chunk.getSectionsCount(); sectionIndex++) {
+            LevelChunkSection section = chunk.getSection(sectionIndex);
+            int sectionY = chunk.getSectionYFromSectionIndex(sectionIndex) << 4;
+            if (sectionY + 15 < center.getY() - radius || sectionY > center.getY() + radius || section.hasOnlyAir() || !section.maybeHas(state -> state.is(ACBlockRegistry.TREMORZILLA_EGG.get()))) {
+                continue;
+            }
+            for (int x = 0; x < 16; x++) {
+                for (int y = 0; y < 16; y++) {
+                    for (int z = 0; z < 16; z++) {
+                        BlockState state = section.getBlockState(x, y, z);
+                        if (!state.is(ACBlockRegistry.TREMORZILLA_EGG.get()) || !(state.getBlock() instanceof TremorzillaEggBlock tremorzillaEggBlock)) {
+                            continue;
+                        }
+                        mutablePos.set((chunk.getPos().x << 4) + x, sectionY + y, (chunk.getPos().z << 4) + z);
+                        if (mutablePos.distSqr(center) <= radius * radius && canBreakAt(mutablePos.getX(), mutablePos.getZ())) {
+                            tremorzillaEggBlock.spawnDinosaurs(level(), mutablePos.immutable(), state);
+                            level().removeBlock(mutablePos, false);
                         }
                     }
                 }
             }
         }
-        return true;
     }
 
     @Override

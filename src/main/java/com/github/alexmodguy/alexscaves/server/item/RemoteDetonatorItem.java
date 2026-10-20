@@ -41,8 +41,12 @@ import java.util.UUID;
 
 public class RemoteDetonatorItem extends Item {
 
+    // Community patch: the chunks were forced (and saved) for ever: nothing ever released them, and they came back at every
+    // start. They are now kept loaded with a plain ticket that expires by itself after a while; this controller only purges
+    // what older versions left in the world.
     public static final TicketController TICKET_CONTROLLER = new TicketController(
-            ResourceLocation.fromNamespaceAndPath(AlexsCaves.MODID, "remote_detonator"));
+            ResourceLocation.fromNamespaceAndPath(AlexsCaves.MODID, "remote_detonator"), com.github.alexmodguy.alexscaves.server.level.storage.ACWorldData::clearLoadedChunksCallback);
+    private static final net.minecraft.server.level.TicketType<BlockPos> LOAD_TICKET = net.minecraft.server.level.TicketType.create("alexscaves:remote_detonator", net.minecraft.core.Vec3i::compareTo, 300);
 
     public RemoteDetonatorItem() {
         super(new Item.Properties().stacksTo(1));
@@ -106,7 +110,7 @@ public class RemoteDetonatorItem extends Item {
         ChunkPos chunkPos = new ChunkPos(center);
         for(int i = -1; i <= 1; i++){
             for(int j = -1; j <= 1; j++){
-                TICKET_CONTROLLER.forceChunk(serverLevel, center, chunkPos.x + i, chunkPos.z + j, load, true);
+                serverLevel.getChunkSource().addRegionTicket(LOAD_TICKET, new ChunkPos(chunkPos.x + i, chunkPos.z + j), 2, center, false);
             }
         }
     }
