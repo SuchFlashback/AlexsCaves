@@ -30,7 +30,7 @@ public class ACServerConfig {
     public final ModConfigSpec.DoubleValue nukeExplosionSizeModifier;
     public final ModConfigSpec.DoubleValue nukeLauncherSizeBonus;
     public final ModConfigSpec.IntValue nukeLauncherMax;
-    public final ModConfigSpec.IntValue nukeChunksPerTick;
+    public final ModConfigSpec.IntValue nukeMsPerTick;
     public final ModConfigSpec.BooleanValue totemOfPossessionPlayers;
     public final ModConfigSpec.IntValue darknessCloakChargeTime;
     public final ModConfigSpec.IntValue darknessCloakFlightTime;
@@ -84,7 +84,7 @@ public class ACServerConfig {
         nukeExplosionSizeModifier = builder.comment("The scale of nuclear bomb destruction. multiply this by 16 to get the radius of a nuclear bomb explosion.").translation("nuclear_explosion_size_modifier").defineInRange("nuclear_explosion_size_modifier", 3.0D, 0.0, Double.MAX_VALUE);
         nukeLauncherSizeBonus = builder.comment("Community patch: a warship click fires every equipped bomb bay (launcher) at once and their bombs are merged into a single explosion. One launcher gives the normal size; the explosion grows by this amount for each extra launcher. 0 = extra launchers only consume bombs.").translation("nuclear_launcher_size_bonus").defineInRange("nuclear_launcher_size_bonus", 2.25D, 0.0, 10.0);
         nukeLauncherMax = builder.comment("Community patch: the most launchers (bomb bays) whose bombs count towards one explosion (1 = no bonus).").translation("nuclear_launcher_max").defineInRange("nuclear_launcher_max", 2, 1, 8);
-        nukeChunksPerTick = builder.comment("Community patch: how many 16x16x16 sections of a nuclear explosion are carved per tick (lower = less lag per tick, longer explosion).").translation("nuclear_chunks_per_tick").defineInRange("nuclear_chunks_per_tick", 2, 1, 8);
+        nukeMsPerTick = builder.comment("Community patch: milliseconds of each server tick that a nuclear explosion may spend carving blocks (lower = smoother, but the explosion lasts longer; the crater is the same). It always carves at least one column per tick.").translation("nuclear_ms_per_tick").defineInRange("nuclear_ms_per_tick", 20, 1, 45);
         totemOfPossessionPlayers = builder.comment("Whether the Totem of Possession can be applied to players.").translation("totem_of_possession_works_on_players").define("totem_of_possession_works_on_players", true);
         darknessCloakChargeTime = builder.comment("The amount of time (in ticks) it takes to charge up the Cloak of Darkness ability.").translation("darkness_cloak_charge_time").defineInRange("darkness_cloak_charge_time", 1000, 20, Integer.MAX_VALUE);
         darknessCloakFlightTime = builder.comment("The amount of time (in ticks) that players can fly with the Cloak of Darkness ability.").translation("darkness_cloak_fly_time").defineInRange("darkness_cloak_fly_time", 200, 20, Integer.MAX_VALUE);
