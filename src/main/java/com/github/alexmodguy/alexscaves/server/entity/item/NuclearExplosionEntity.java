@@ -88,6 +88,8 @@ public class NuclearExplosionEntity extends Entity {
     private static final double MAX_WIDTH_FACTOR = 1.8D;
     // After the minimum 40 ticks the entity effects are only applied every few ticks (the invulnerability window is 10).
     private static final int LATE_EFFECT_INTERVAL = 5;
+    // Strongest push of the blast on a surviving player, in blocks per tick (enough to leave the blast in a few ticks).
+    private static final double PLAYER_MAX_PUSH = 8.0D;
     // The chunks the explosion works on are kept loaded (and ticking, so the players see the blocks go) with a plain region
     // ticket that is released at the end; they load in the background while the carving works on the ones that are ready.
     private static final TicketType<UUID> NUKE_TICKET = TicketType.create("alexscaves:nuclear_explosion", UUID::compareTo);
@@ -279,7 +281,18 @@ public class NuclearExplosionEntity extends Entity {
                 // killed by this blast: throwing the corpse hundreds of blocks per tick only made the server load chunks far away
                 continue;
             }
-            entity.setDeltaMovement(vec3.scale(damage * 0.1F * playerFling));
+            // lab8: creative and spectator players are not pushed (vanilla explosions do not push spectators or flying creative
+            // players either), and a surviving player (a totem, say) is pushed at most PLAYER_MAX_PUSH blocks per tick: the push
+            // is damage-sized (hundreds of blocks per tick near a big bomb) and the server moved such a player that far every
+            // tick and loaded new terrain around it (1-7 s ticks). Mobs are pushed as before.
+            if (entity instanceof Player player) {
+                if (!player.isCreative() && !player.isSpectator()) {
+                    Vec3 push = vec3.scale(damage * 0.1F * playerFling);
+                    entity.setDeltaMovement(push.lengthSqr() > PLAYER_MAX_PUSH * PLAYER_MAX_PUSH ? push.normalize().scale(PLAYER_MAX_PUSH) : push);
+                }
+            } else {
+                entity.setDeltaMovement(vec3.scale(damage * 0.1F * playerFling));
+            }
             if(!this.isIntentionalGameDesign()){
                 entity.addEffect(new MobEffectInstance(ACEffectRegistry.IRRADIATED, 48000, getSize() <= 1.5F ? 1 : 2, false, false, true));
             }
