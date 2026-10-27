@@ -14,10 +14,12 @@ import com.github.alexmodguy.alexscaves.server.misc.war.NukeWars;
 import com.github.alexmodguy.alexscaves.server.potion.ACEffectRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -99,6 +101,8 @@ public class NuclearExplosionEntity extends Entity {
     // thread froze the server for all that time
     private static final int MAX_CHUNK_WAIT_TICKS = 6000;
     private static final int FINISH_DELAY_TICKS = 5;
+    // The mushroom cloud reaches the players this far away (horizontally); it is drawn up to 4 times the render distance.
+    private static final double CLOUD_SEND_RANGE = 512.0D;
     private static final boolean PROFILE = Boolean.getBoolean("alexscaves.nukeprofile");
     private static long serverTickStart = 0L;
     private static long serverTickSumNs = 0L;
@@ -196,13 +200,9 @@ public class NuclearExplosionEntity extends Entity {
         long scanNs = 0L;
         int chunksAffected = getChunksAffected();
         int radius = Math.max(1, Math.round(getSize() * 15F));
-        if (!spawnedParticle) {
+        if (!spawnedParticle && !level().isClientSide) {
             spawnedParticle = true;
-            int particleY = (int) Math.ceil(this.getY());
-            while (particleY > level().getMinBuildHeight() && particleY > this.getY() - radius / 2F && isDestroyable(level().getBlockState(BlockPos.containing(this.getX(), particleY, this.getZ())))) {
-                particleY--;
-            }
-            level().addAlwaysVisibleParticle(ACParticleRegistry.MUSHROOM_CLOUD.get(), true, this.getX(), particleY + 2, this.getZ(), this.getSize(), isIntentionalGameDesign() ? 1.0F : 0.0F, 0);
+            sendMushroomCloud(radius);
         }
         if (tickCount > 40 && carvingFinished() && (level().isClientSide || isNoGriefing() || hatchedTremorzillaEggs)) {
             if (!level().isClientSide && started && finishedTick < 0) {
@@ -374,6 +374,34 @@ public class NuclearExplosionEntity extends Entity {
 
     private int getChunksAffected() {
         return (int) Math.ceil(this.getSize());
+    }
+
+    /**
+     * Community patch: the mushroom cloud is sent by the server once the explosion really starts (not while it waits its turn),
+     * to every player of the dimension within CLOUD_SEND_RANGE blocks, instead of being spawned by each client that tracks the
+     * entity (only within the server view distance, 128 blocks: less than the deadly area of the large bomb). It rises from where
+     * the bomb went off, out of any water above it; the original walked down through every destroyable block (air and ground)
+     * for radius / 2 and buried the cloud at the bottom of the crater.
+     */
+    private void sendMushroomCloud(int radius) {
+        if (!(level() instanceof ServerLevel serverLevel)) {
+            return;
+        }
+        BlockPos.MutableBlockPos pos = this.blockPosition().mutable();
+        int top = Math.min(level().getMaxBuildHeight() - 1, pos.getY() + radius);
+        while (pos.getY() < top && !level().getFluidState(pos).isEmpty()) {
+            pos.move(0, 1, 0);
+        }
+        double cloudY = Math.max(this.getY(), pos.getY());
+        float cloudScale = AlexsCaves.COMMON_CONFIG.nukeCloudScale.get().floatValue();
+        ClientboundLevelParticlesPacket packet = new ClientboundLevelParticlesPacket(ACParticleRegistry.MUSHROOM_CLOUD.get(), true, this.getX(), cloudY, this.getZ(), this.getSize(), isIntentionalGameDesign() ? 1.0F : 0.0F, cloudScale, 1.0F, 0);
+        for (ServerPlayer player : serverLevel.players()) {
+            double dx = player.getX() - this.getX();
+            double dz = player.getZ() - this.getZ();
+            if (dx * dx + dz * dz <= CLOUD_SEND_RANGE * CLOUD_SEND_RANGE) {
+                player.connection.send(packet);
+            }
+        }
     }
 
     /** Keeps the chunks of the crater loaded (hold) or lets them go. */
