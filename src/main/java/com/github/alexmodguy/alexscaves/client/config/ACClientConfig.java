@@ -19,6 +19,8 @@ public class ACClientConfig {
     public final ModConfigSpec.IntValue subterranodonIndicatorX;
     public final ModConfigSpec.IntValue subterranodonIndicatorY;
     public final ModConfigSpec.BooleanValue nuclearBombMufflesSounds;
+    public final ModConfigSpec.BooleanValue horizonHaze;
+    public final ModConfigSpec.DoubleValue horizonHazeStrength;
 
     public ACClientConfig(final ModConfigSpec.Builder builder) {
         builder.push("visuals");
@@ -36,6 +38,8 @@ public class ACClientConfig {
         subterranodonIndicatorX = builder.comment("determines how far to the left the subterranodon flight indicator renders on the screen when mounted. Negative numbers will render it on the right. ").translation("subterranodon_indicator_x").defineInRange("subterranodon_indicator_x", 22, -12000, 12000);
         subterranodonIndicatorY = builder.comment("determines how far from bottom the subterranodon flight indicator renders on the screen when mounted.").translation("subterranodon_indicator_y").defineInRange("subterranodon_indicator_y", 6, -12000, 12000);
         sugarRushSaturationEffect = builder.comment("true if sugar rush makes the world more saturated. May conflict with shaders.").translation("sugar_rush_saturation_effect").define("sugar_rush_saturation_effect", true);
+        horizonHaze = builder.comment("Community patch: replaces the thick fog that hides the edge of the loaded world with a light haze that tints the far terrain. False = the vanilla fog. Water, lava, blindness, Nether and cave biome fogs do not change.").translation("horizon_haze").define("horizon_haze", true);
+        horizonHazeStrength = builder.comment("Community patch: how much the haze covers the farthest loaded terrain (0.3 = 30 %, less nearer). 0 = no fog at all over land.").translation("horizon_haze_strength").defineInRange("horizon_haze_strength", 0.3D, 0.0D, 1.0D);
         builder.pop();
         builder.push("audio");
         nuclearBombMufflesSounds = builder.comment("whether nuclear explosions briefly muffle other sounds.").translation("nuclear_bomb_muffles_sounds").define("nuclear_bomb_muffles_sounds", true);

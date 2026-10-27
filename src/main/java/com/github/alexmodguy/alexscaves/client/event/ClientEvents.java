@@ -29,6 +29,7 @@ import com.github.alexthe666.citadel.client.event.EventPosePlayerHand;
 import com.github.alexthe666.citadel.client.event.EventRenderSplashText;
 import com.github.alexthe666.citadel.client.tick.ClientTickRateTracker;
 import com.github.alexthe666.citadel.server.tick.TickRateTracker;
+import com.mojang.blaze3d.shaders.FogShape;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -892,20 +893,58 @@ public class ClientEvents {
                 event.setCanceled(true);
                 event.setFarPlaneDistance(defaultFarPlaneDistance * farness);
             }
-        } else if (event.getMode() == FogRenderer.FogMode.FOG_TERRAIN
-                && AlexsCaves.CLIENT_CONFIG.biomeSkyFogOverrides.get()) {
-            float nearness = lastSampledFogNearness;
-            float primordialBossAmount = AlexsCaves.PROXY.getPrimordialBossActiveAmount((float) event.getPartialTick());
-            boolean flag = Math.abs(nearness) - 1.0F < 0.01F;
-            if (primordialBossAmount > 0.0F) {
-                flag = true;
-                nearness *= (1.0F - primordialBossAmount * 0.75F);
+        } else if (event.getMode() == FogRenderer.FogMode.FOG_TERRAIN) {
+            float near = defaultNearPlaneDistance;
+            float far = defaultFarPlaneDistance;
+            float nearness = 1.0F;
+            boolean changed = false;
+            if (AlexsCaves.CLIENT_CONFIG.biomeSkyFogOverrides.get()) {
+                nearness = lastSampledFogNearness;
+                float primordialBossAmount = AlexsCaves.PROXY.getPrimordialBossActiveAmount((float) event.getPartialTick());
+                boolean flag = Math.abs(nearness) - 1.0F < 0.01F;
+                if (primordialBossAmount > 0.0F) {
+                    flag = true;
+                    nearness *= (1.0F - primordialBossAmount * 0.75F);
+                }
+                if (flag) {
+                    near = defaultNearPlaneDistance * nearness;
+                    changed = true;
+                }
             }
-            if (flag) {
+            if (isPlainLandFog(event)) {
+                // Community patch: the thick fog that hides the edge of the loaded world becomes a light haze that only
+                // tints the far terrain; the thicker fog of the cave biomes (nearness below 1) fades back in as before
+                float renderDistance = Math.max(event.getRenderer().getRenderDistance(), 32.0F);
+                float strength = AlexsCaves.CLIENT_CONFIG.horizonHazeStrength.get().floatValue();
+                float hazeNear = strength <= 0.0F ? NO_FOG_DISTANCE : renderDistance * 0.1F;
+                float hazeFar = strength <= 0.0F ? NO_FOG_DISTANCE : hazeNear + (renderDistance - hazeNear) / strength;
+                float caveFog = Mth.clamp((1.0F - nearness) * 4.0F, 0.0F, 1.0F);
+                near = Mth.lerp(caveFog, hazeNear, near);
+                far = Mth.lerp(caveFog, hazeFar, far);
+                changed = true;
+            }
+            if (changed) {
                 event.setCanceled(true);
-                event.setNearPlaneDistance(defaultNearPlaneDistance * nearness);
+                event.setNearPlaneDistance(near);
+                event.setFarPlaneDistance(far);
             }
         }
+    }
+
+    // Community patch: "no fog" as a distance far beyond anything drawn (Float.MAX_VALUE breaks the blend with the cave fog)
+    private static final float NO_FOG_DISTANCE = 1000000.0F;
+
+    /**
+     * Community patch: the plain fog over land at the render distance (in the open air, no blindness, no Nether or boss fog),
+     * set up for the terrain itself: Sodium sets up the fog of its clouds with their own, longer distance, and those keep
+     * their fog so their edge stays hidden.
+     */
+    private static boolean isPlainLandFog(ViewportEvent.RenderFog event) {
+        if (!AlexsCaves.CLIENT_CONFIG.horizonHaze.get() || event.getType() != FogType.NONE || event.getFogShape() != FogShape.CYLINDER) {
+            return false;
+        }
+        float renderDistance = Math.max(event.getRenderer().getRenderDistance(), 32.0F);
+        return Math.abs(event.getFarPlaneDistance() - renderDistance) < 0.5F;
     }
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
